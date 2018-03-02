@@ -43,6 +43,9 @@ private:
     mutable std::mutex _lock;
     mutable std::list<std::pair<std::string, std::string>> _list;
     std::map<std::reference_wrapper<const std::string>, decltype(_list)::iterator, std::less<const std::string>> _backend;
+
+    bool get_value_if_exists(const std::string &key, std::string &value);
+
 };
 
 } // namespace Backend

@@ -9,7 +9,7 @@ namespace Backend {
 bool MapBasedGlobalLockImpl::Put(const std::string &key, const std::string &value) { 
     std::unique_lock<std::mutex> guard(_lock);
     std::string tmp_value;
-    if (MapBasedGlobalLockImpl::Get(key, tmp_value)){
+    if (get_value_if_exists(key, tmp_value)){
         _list.front().second = value;
     } else {
         auto new_elem_size = key.size() + value.size();
@@ -33,7 +33,7 @@ bool MapBasedGlobalLockImpl::Put(const std::string &key, const std::string &valu
 bool MapBasedGlobalLockImpl::PutIfAbsent(const std::string &key, const std::string &value) {
     std::unique_lock<std::mutex> guard(_lock);
     std::string tmp_value;
-    if (MapBasedGlobalLockImpl::Get(key, tmp_value)){
+    if (get_value_if_exists(key, tmp_value)){
         return false;
     } else {
         auto new_elem_size = key.size() + value.size();
@@ -57,7 +57,7 @@ bool MapBasedGlobalLockImpl::PutIfAbsent(const std::string &key, const std::stri
 bool MapBasedGlobalLockImpl::Set(const std::string &key, const std::string &value) {
     std::unique_lock<std::mutex> guard(_lock);
     std::string tmp_value;
-    if (MapBasedGlobalLockImpl::Get(key, tmp_value)){
+    if (get_value_if_exists(key, tmp_value)){
         _list.front().second = value;
     }
     return true; 
@@ -67,7 +67,7 @@ bool MapBasedGlobalLockImpl::Set(const std::string &key, const std::string &valu
 bool MapBasedGlobalLockImpl::Delete(const std::string &key) { 
     std::unique_lock<std::mutex> guard(_lock);
     std::string tmp_value;
-    if (MapBasedGlobalLockImpl::Get(key, tmp_value)){
+    if (get_value_if_exists(key, tmp_value)){
         auto item = _backend.find(key);
         _list.erase(item->second);
         _backend.erase(key);
@@ -79,6 +79,16 @@ bool MapBasedGlobalLockImpl::Delete(const std::string &key) {
 // See MapBasedGlobalLockImpl.h
 bool MapBasedGlobalLockImpl::Get(const std::string &key, std::string &value) const { 
     std::unique_lock<std::mutex> guard(_lock);
+    auto it = _backend.find(key);
+    if (it != _backend.end()){
+        _list.splice(_list.begin(), _list, it->second);
+        value = _list.front().second;
+        return true;
+    }
+    return false; 
+}
+
+bool MapBasedGlobalLockImpl::get_value_if_exists(const std::string &key, std::string &value) { 
     auto it = _backend.find(key);
     if (it != _backend.end()){
         _list.splice(_list.begin(), _list, it->second);
