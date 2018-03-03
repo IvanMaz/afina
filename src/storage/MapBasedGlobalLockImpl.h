@@ -45,7 +45,7 @@ private:
 class MapBasedGlobalLockImpl : public Afina::Storage {
 public:
     MapBasedGlobalLockImpl(size_t max_size = 1024) : _max_size(max_size), _size(0), _list(new Dl_list()) {}
-    ~MapBasedGlobalLockImpl() {delete(_list);}
+    ~MapBasedGlobalLockImpl() { delete (_list); }
 
     // Implements Afina::Storage interface
     bool Put(const std::string &key, const std::string &value) override;
@@ -66,13 +66,12 @@ private:
     size_t _max_size;
     size_t _size;
     mutable std::mutex _lock;
-    //mutable std::list<std::pair<std::string, std::string>> _list;
-    //std::map<std::reference_wrapper<const std::string>, decltype(_list)::iterator, std::less<const std::string>>_backend;
-    
-    Dl_list *_list;
-    std::map<std::reference_wrapper<const std::string>, Node *, std::less<const std::string>>_backend;
 
-    bool get_value_if_exists(const std::string &key, std::string &value);
+    Dl_list *_list;
+    std::map<std::reference_wrapper<const std::string>, Node *, std::less<const std::string>> _backend;
+
+    bool exists(const std::string &key) const;
+    bool free_space(size_t);
 };
 
 } // namespace Backend

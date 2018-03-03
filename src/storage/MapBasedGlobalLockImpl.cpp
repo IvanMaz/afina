@@ -8,23 +8,15 @@ namespace Backend {
 // See MapBasedGlobalLockImpl.h
 bool MapBasedGlobalLockImpl::Put(const std::string &key, const std::string &value) {
     std::unique_lock<std::mutex> guard(_lock);
-    std::string tmp_value;
-    if (get_value_if_exists(key, tmp_value)) {
+
+    if (exists(key)) {
         _list->front()->value = value;
     } else {
-        auto new_elem_size = key.size() + value.size();
-        if (new_elem_size > _max_size) {
-            return false;
-        }
-        while (new_elem_size + _size > _max_size) {
-            auto last = _list->back();
-            _size -= (last->key.size() + last->key.size());
-            _backend.erase(_list->back()->key);
-            _list->pop_back();
+        if (!free_space(key.size() + value.size())) {
+            return true;
         }
         _list->push_front(key, value);
         _backend.emplace(_list->front()->key, _list->front());
-        _size += new_elem_size;
     }
     return true;
 }
@@ -32,23 +24,15 @@ bool MapBasedGlobalLockImpl::Put(const std::string &key, const std::string &valu
 // See MapBasedGlobalLockImpl.h
 bool MapBasedGlobalLockImpl::PutIfAbsent(const std::string &key, const std::string &value) {
     std::unique_lock<std::mutex> guard(_lock);
-    std::string tmp_value;
-    if (get_value_if_exists(key, tmp_value)) {
+
+    if (exists(key)) {
         return false;
     } else {
-        auto new_elem_size = key.size() + value.size();
-        if (new_elem_size > _max_size) {
-            return false;
-        }
-        while (new_elem_size + _size > _max_size) {
-            auto last = _list->back();
-            _size -= (last->key.size() + last->key.size());
-            _backend.erase(_list->back()->key);
-            _list->pop_back();
+        if (!free_space(key.size() + value.size())) {
+            return true;
         }
         _list->push_front(key, value);
         _backend[key] = _list->front();
-        _size += new_elem_size;
     }
     return true;
 }
@@ -56,8 +40,12 @@ bool MapBasedGlobalLockImpl::PutIfAbsent(const std::string &key, const std::stri
 // See MapBasedGlobalLockImpl.h
 bool MapBasedGlobalLockImpl::Set(const std::string &key, const std::string &value) {
     std::unique_lock<std::mutex> guard(_lock);
-    std::string tmp_value;
-    if (get_value_if_exists(key, tmp_value)) {
+
+    if (exists(key)) {
+        if (!free_space(key.size() + value.size())) {
+            return false;
+        }
+        _size - +key.size();
         _list->front()->value = value;
     }
     return true;
@@ -66,9 +54,10 @@ bool MapBasedGlobalLockImpl::Set(const std::string &key, const std::string &valu
 // See MapBasedGlobalLockImpl.h
 bool MapBasedGlobalLockImpl::Delete(const std::string &key) {
     std::unique_lock<std::mutex> guard(_lock);
-    std::string tmp_value;
-    if (get_value_if_exists(key, tmp_value)) {
+
+    if (exists(key)) {
         auto item = _backend.find(key);
+        _size -= key.size() + item->second->value.size();
         _list->erase(item->second);
         _backend.erase(key);
         return true;
@@ -79,23 +68,38 @@ bool MapBasedGlobalLockImpl::Delete(const std::string &key) {
 // See MapBasedGlobalLockImpl.h
 bool MapBasedGlobalLockImpl::Get(const std::string &key, std::string &value) const {
     std::unique_lock<std::mutex> guard(_lock);
-    auto it = _backend.find(key);
-    if (it != _backend.end()) {
-        _list->move_to_front(it->second);
+
+    if (exists(key)) {
         value = _list->front()->value;
         return true;
     }
     return false;
 }
 
-bool MapBasedGlobalLockImpl::get_value_if_exists(const std::string &key, std::string &value) {
+// Check if record for given key exists and move it to the beginnind of LRU _list
+bool MapBasedGlobalLockImpl::exists(const std::string &key) const {
     auto it = _backend.find(key);
     if (it != _backend.end()) {
         _list->move_to_front(it->second);
-        value = _list->front()->value;
         return true;
     }
     return false;
+}
+
+// Check if new pair key/value fits into memory
+// Remove least used records from cache until there is enought space for new record
+bool MapBasedGlobalLockImpl::free_space(size_t elem_size) {
+    if (elem_size > _max_size) {
+        return false;
+    }
+    while (elem_size + _size > _max_size) {
+        auto last = _list->back();
+        _size -= last->key.size() + last->key.size();
+        _backend.erase(_list->back()->key);
+        _list->pop_back();
+    }
+    _size += elem_size;
+    return true;
 }
 
 Dl_list::Dl_list() { head = NULL; }
@@ -165,7 +169,6 @@ void Dl_list::move_to_front(Node *node) {
 Node *Dl_list::front() { return head; }
 
 Node *Dl_list::back() { return tail; }
-
 
 } // namespace Backend
 } // namespace Afina
