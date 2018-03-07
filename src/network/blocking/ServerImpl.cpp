@@ -17,7 +17,9 @@
 #include <netinet/in.h>
 #include <unistd.h>
 
+#include "../../protocol/Parser.h"
 #include <afina/Storage.h>
+#include <afina/execute/Command.h>
 
 namespace Afina {
 namespace Network {
@@ -27,6 +29,16 @@ void *ServerImpl::RunAcceptorProxy(void *p) {
     ServerImpl *srv = reinterpret_cast<ServerImpl *>(p);
     try {
         srv->RunAcceptor();
+    } catch (std::runtime_error &ex) {
+        std::cerr << "Server fails: " << ex.what() << std::endl;
+    }
+    return 0;
+}
+
+void *ServerImpl::RunConnectionProxy(void *p) {
+    auto *srv = reinterpret_cast<std::pair<ServerImpl *, int> *>(p);
+    try {
+        srv->first->RunConnection(srv->second);
     } catch (std::runtime_error &ex) {
         std::cerr << "Server fails: " << ex.what() << std::endl;
     }
@@ -90,6 +102,7 @@ void ServerImpl::Start(uint32_t port, uint16_t n_workers) {
 // See Server.h
 void ServerImpl::Stop() {
     std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
+    shutdown(server_socket, SHUT_RDWR);
     running.store(false);
 }
 
@@ -170,27 +183,82 @@ void ServerImpl::RunAcceptor() {
             throw std::runtime_error("Socket accept() failed");
         }
 
-        // TODO: Start new thread and process data from/to connection
-        {
-            std::string msg = "TODO: start new thread and process memcached protocol instead";
-            if (send(client_socket, msg.data(), msg.size(), 0) <= 0) {
-                close(client_socket);
-                close(server_socket);
-                throw std::runtime_error("Socket send() failed");
+        // Start new thread and process data from/to connection
+        std::lock_guard<std::mutex> lock(connections_mutex);
+        if (connections.size() < max_workers) {
+            auto temp = std::make_pair(this, client_socket);
+            pthread_t client_pthread;
+            if (pthread_create(&client_pthread, NULL, ServerImpl::RunConnectionProxy, &temp) < 0) {
+                throw std::runtime_error("Could not create server thread");
             }
+            connections.insert(client_pthread);
+        } else {
             close(client_socket);
         }
     }
 
     // Cleanup on exit...
     close(server_socket);
+
+    std::unique_lock<std::mutex> __lock(connections_mutex);
+    while (!connections.empty()) {
+        connections_cv.wait(__lock);
+    }
 }
 
 // See Server.h
-void ServerImpl::RunConnection() {
+void ServerImpl::RunConnection(int socket) {
     std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
-    // TODO: All connection work is here
-}
+    pthread_t self = pthread_self();
+    {
+        std::unique_lock<std::mutex> __lock(connections_mutex);
+        connections.insert(self);
+    }
+    Protocol::Parser parser;
+    size_t buf_size = 2;
+    uint32_t body_size;
+    size_t parsed, all_parsed;
+    ssize_t input_size;
+    std::string command = "";
+    std::string args = "";
+    char buf[buf_size];
+
+    while (running.load()) {
+        if ((input_size = read(socket, buf, buf_size)) <= 0) {
+            break;
+        }
+        command += buf;
+        if (parser.Parse(buf, input_size, parsed)) {
+            command.substr(parsed);
+            auto command_ptr = parser.Build(body_size);
+            parser.Reset();
+            if (body_size > 0) {
+                while (body_size + 2 > command.size()) {
+                    input_size = read(socket, buf, buf_size);
+                    command += buf;
+                }
+
+                args = command.substr(0, body_size);
+                command.erase(0, body_size + 2);
+            }
+            std::string result;
+            try {
+                command_ptr->Execute(*pStorage, args, result);
+            } catch (...) {
+                result = "SERVER_ERROR";
+            }
+            result += "\r\n";
+            if (result.size() && send(socket, result.data(), result.size(), 0) <= 0) {
+                break;
+            }
+            parser.Reset();
+        } else {
+            command.substr(parsed);
+            continue;
+        }
+    }
+    close(socket);
+} // namespace Blocking
 
 } // namespace Blocking
 } // namespace Network
