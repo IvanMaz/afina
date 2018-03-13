@@ -1,6 +1,7 @@
 #ifndef AFINA_THREADPOOL_H
 #define AFINA_THREADPOOL_H
 
+#include <chrono>
 #include <condition_variable>
 #include <functional>
 #include <memory>
@@ -27,8 +28,16 @@ class Executor {
         kStopped
     };
 
-    Executor(std::string name, int size);
-    ~Executor();
+public:
+    Executor(std::string name, size_t low_watermark, size_t high_watermark, size_t max_queue_size,
+             std::chrono::milliseconds idle_time)
+        : low_watermark(low_watermark), high_watermark(high_watermark), max_queue_size(max_queue_size),
+          idle_time(idle_time), idle_threads(0), state(State::kRun) {
+        for (auto i = 0; i < low_watermark; i++) {
+            threads.emplace_back(perform, this);
+        }
+    }
+    ~Executor() { Stop(true); }
 
     /**
      * Signal thread pool to stop, it will stop accepting new jobs and close threads just after each become
@@ -36,7 +45,16 @@ class Executor {
      *
      * In case if await flag is true, call won't return until all background jobs are done and all threads are stopped
      */
-    void Stop(bool await = false);
+    void Stop(bool await = false) {
+        state = State::kStopping;
+        empty_condition.notify_all();
+        if (await) {
+            while (!threads.empty()) {
+                stop_condition.wait(lock);
+            }
+        }
+        state = State::kStopped;
+    }
 
     /**
      * Add function to be executed on the threadpool. Method returns true in case if task has been placed
@@ -52,6 +70,14 @@ class Executor {
         std::unique_lock<std::mutex> lock(this->mutex);
         if (state != State::kRun) {
             return false;
+        }
+
+        if (!idle_threads) {
+            if (threads.size() < high_watermark) {
+                threads.emplace_back(perform, this);
+            } else if (tasks.size() == max_queue_size) {
+                return false;
+            }
         }
 
         // Enqueue new task
@@ -70,7 +96,34 @@ private:
     /**
      * Main function that all pool threads are running. It polls internal task queue and execute tasks
      */
-    friend void perform(Executor *executor);
+    friend void perform(Executor *executor) {
+        std::function<void()> task;
+        auto active_time = std::chrono::system_clock::now();
+        while (true) {
+            {
+                std::unique_lock<std::mutex> lock(executor->mutex);
+                executor->idle_threads += 1;
+                executor->empty_condition.wait_for(lock, executor->idle_time, [&executor](void) {
+                    return executor->state == Executor::State::kStopping || !executor->tasks.empty() || ;
+                });
+                executor->idle_threads -= 1;
+
+                if ((std::chrono::system_clock::now() - active_time >= executor->idle_time &&
+                         executor->threads.size() > executor->low_watermark ||
+                     executor->state != State::kRun) &&
+                    executor->tasks.empty()) {
+                    executor->threads.erase(std::this_thread::get_id());
+                    executor->stop_condition.notify_one();
+                    return;
+                }
+
+                task = executor->tasks.front();
+                executor->tasks.pop_front();
+            }
+            task();
+            active_time = std::chrono::system_clock::now();
+        }
+    }
 
     /**
      * Mutex to protect state below from concurrent modification
@@ -81,6 +134,7 @@ private:
      * Conditional variable to await new data in case of empty queue
      */
     std::condition_variable empty_condition;
+    std::condition_variable stop_condition;
 
     /**
      * Vector of actual threads that perorm execution
@@ -96,6 +150,24 @@ private:
      * Flag to stop bg threads
      */
     State state;
+
+    /**
+     * Min and max numbers of threads in pool
+     */
+    size_t low_watermark;
+    size_t high_watermark;
+
+    /**
+     * Max size of task queue
+     */
+    size_t max_queue_size;
+
+    /**
+     * Time to wait for the new task
+     */
+    std::chrono::milliseconds idle_time;
+
+    size_t idle_threads;
 };
 
 } // namespace Afina
