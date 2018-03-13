@@ -42,7 +42,7 @@ void *ServerImpl::RunConnectionProxy(void *p) {
     } catch (std::runtime_error &ex) {
         std::cerr << "Server fails: " << ex.what() << std::endl;
     }
-    return 0;
+    
 }
 
 // See Server.h
@@ -109,7 +109,11 @@ void ServerImpl::Stop() {
 // See Server.h
 void ServerImpl::Join() {
     std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
-    pthread_join(accept_thread, 0);
+    pthread_join(accept_thread, NULL);
+    std::unique_lock<std::mutex> lock(connections_mutex);
+    while (!connections.empty()) {
+        connections_cv.wait(lock);
+    }
 }
 
 // See Server.h
@@ -189,6 +193,7 @@ void ServerImpl::RunAcceptor() {
             auto temp = std::make_pair(this, client_socket);
             pthread_t client_pthread;
             if (pthread_create(&client_pthread, NULL, ServerImpl::RunConnectionProxy, &temp) < 0) {
+                close(client_socket);
                 throw std::runtime_error("Could not create server thread");
             }
             connections.insert(client_pthread);
@@ -199,11 +204,6 @@ void ServerImpl::RunAcceptor() {
 
     // Cleanup on exit...
     close(server_socket);
-
-    std::unique_lock<std::mutex> __lock(connections_mutex);
-    while (!connections.empty()) {
-        connections_cv.wait(__lock);
-    }
 }
 
 // See Server.h
@@ -211,11 +211,11 @@ void ServerImpl::RunConnection(int socket) {
     std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
     pthread_t self = pthread_self();
     {
-        std::unique_lock<std::mutex> __lock(connections_mutex);
+        std::lock_guard<std::mutex> lock(connections_mutex);
         connections.insert(self);
     }
     Protocol::Parser parser;
-    size_t buf_size = 2;
+    size_t buf_size = 2048;
     uint32_t body_size;
     size_t parsed, all_parsed;
     ssize_t input_size;
@@ -257,8 +257,13 @@ void ServerImpl::RunConnection(int socket) {
             continue;
         }
     }
+    pthread_t self_id = pthread_self();
     close(socket);
-} // namespace Blocking
+    std::lock_guard<std::mutex> lock(connections_mutex);
+    connections.erase(self_id);
+    connections_cv.notify_all();
+    pthread_exit(nullptr);
+}
 
 } // namespace Blocking
 } // namespace Network
