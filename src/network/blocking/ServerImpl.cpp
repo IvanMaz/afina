@@ -187,14 +187,12 @@ void ServerImpl::RunAcceptor() {
             close(server_socket);
             throw std::runtime_error("Socket accept() failed");
         }
-        std::cout << "LUL";
+        
         // Start new thread and process data from/to connection
         std::lock_guard<std::mutex> lock(connections_mutex);
-        std::cout << '\n' << connections.size() << '\n';
         if (connections.size() < max_workers) {
             auto temp = std::make_pair(this, client_socket);
             pthread_t client_pthread;
-            std::cout << "MEGALUL";
             if (!ex.Execute(&Afina::Network::Blocking::ServerImpl::RunConnection, this, client_socket)) {
                 close(client_socket);
                 throw std::runtime_error("Could not create server thread");
@@ -236,7 +234,7 @@ void ServerImpl::RunConnection(int socket) {
         }
         command += buf;
         if (parser.Parse(buf, input_size, parsed)) {
-            command.substr(parsed);
+            command.erase(0, parsed);
             auto command_ptr = parser.Build(body_size);
             parser.Reset();
             if (body_size > 0) {
@@ -269,7 +267,6 @@ void ServerImpl::RunConnection(int socket) {
     std::lock_guard<std::mutex> lock(connections_mutex);
     connections.erase(self_id);
     connections_cv.notify_all();
-    std::cout << connections.size() << "OMEGALUL\n";
     pthread_exit(nullptr);
 }
 

@@ -10,10 +10,15 @@ bool MapBasedGlobalLockImpl::Put(const std::string &key, const std::string &valu
     std::unique_lock<std::mutex> guard(_lock);
 
     if (exists(key)) {
+        _size -= key.size() + _list->front()->value.size();
+        if (!free_space(key.size() + value.size())) {
+            _size += key.size() + _list->front()->value.size();
+            return false;
+        }
         _list->front()->value = value;
     } else {
         if (!free_space(key.size() + value.size())) {
-            return true;
+            return false;
         }
         _list->push_front(key, value);
         _backend.emplace(_list->front()->key, _list->front());
@@ -29,7 +34,7 @@ bool MapBasedGlobalLockImpl::PutIfAbsent(const std::string &key, const std::stri
         return false;
     } else {
         if (!free_space(key.size() + value.size())) {
-            return true;
+            return false;
         }
         _list->push_front(key, value);
         _backend[key] = _list->front();
@@ -42,10 +47,11 @@ bool MapBasedGlobalLockImpl::Set(const std::string &key, const std::string &valu
     std::unique_lock<std::mutex> guard(_lock);
 
     if (exists(key)) {
+        _size -= key.size() + _list->front()->value.size();
         if (!free_space(key.size() + value.size())) {
+            _size += key.size() + _list->front()->value.size();
             return false;
         }
-        _size - +key.size();
         _list->front()->value = value;
     }
     return true;
