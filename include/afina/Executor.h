@@ -53,7 +53,9 @@ public:
         empty_condition.notify_all();
         if (await) {
             for (auto &t : this->threads) {
-                t.join();
+                if (t.joinable()){
+                    t.join();
+                }
             }
         }
         state = State::kStopped;
@@ -112,6 +114,7 @@ private:
                         executor->tasks.empty()) {
                         for (size_t i = 0; i < executor->threads.size(); i++) {
                             if (executor->threads[i].get_id() == std::this_thread::get_id()) {
+                                executor->threads[i].detach();
                                 executor->threads.erase(executor->threads.begin() + i);
                                 break;
                             }

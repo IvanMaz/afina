@@ -140,7 +140,7 @@ void ServerImpl::RunAcceptor() {
     // - Family: IPv4
     // - Type: Full-duplex stream (reliable)
     // - Protocol: TCP
-    int server_socket = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
+    server_socket = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (server_socket == -1) {
         throw std::runtime_error("Failed to open socket");
     }
@@ -187,12 +187,14 @@ void ServerImpl::RunAcceptor() {
             close(server_socket);
             throw std::runtime_error("Socket accept() failed");
         }
-
+        std::cout << "LUL";
         // Start new thread and process data from/to connection
         std::lock_guard<std::mutex> lock(connections_mutex);
+        std::cout << '\n' << connections.size() << '\n';
         if (connections.size() < max_workers) {
             auto temp = std::make_pair(this, client_socket);
             pthread_t client_pthread;
+            std::cout << "MEGALUL";
             if (!ex.Execute(&Afina::Network::Blocking::ServerImpl::RunConnection, this, client_socket)) {
                 close(client_socket);
                 throw std::runtime_error("Could not create server thread");
@@ -202,8 +204,6 @@ void ServerImpl::RunAcceptor() {
                 close(client_socket);
                 throw std::runtime_error("Could not create server thread");
             }*/
-
-            connections.insert(client_pthread);
         } else {
             close(client_socket);
         }
@@ -269,6 +269,7 @@ void ServerImpl::RunConnection(int socket) {
     std::lock_guard<std::mutex> lock(connections_mutex);
     connections.erase(self_id);
     connections_cv.notify_all();
+    std::cout << connections.size() << "OMEGALUL\n";
     pthread_exit(nullptr);
 }
 
