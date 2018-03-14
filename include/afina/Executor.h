@@ -4,6 +4,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <functional>
+#include <iostream>
 #include <memory>
 #include <mutex>
 #include <queue>
@@ -12,6 +13,8 @@
 
 namespace Afina {
 
+class Executor;
+static void perform(Executor *executor);
 /**
  * # Thread pool
  */
@@ -49,8 +52,8 @@ public:
         state = State::kStopping;
         empty_condition.notify_all();
         if (await) {
-            while (!threads.empty()) {
-                stop_condition.wait(lock);
+            for (auto &t : this->threads) {
+                t.join();
             }
         }
         state = State::kStopped;
@@ -96,32 +99,32 @@ private:
     /**
      * Main function that all pool threads are running. It polls internal task queue and execute tasks
      */
-    friend void perform(Executor *executor) {
+    static void perform(Executor *executor) {
         std::function<void()> task;
-        auto active_time = std::chrono::system_clock::now();
         while (true) {
             {
                 std::unique_lock<std::mutex> lock(executor->mutex);
                 executor->idle_threads += 1;
-                executor->empty_condition.wait_for(lock, executor->idle_time, [&executor](void) {
-                    return executor->state == Executor::State::kStopping || !executor->tasks.empty() || ;
-                });
-                executor->idle_threads -= 1;
-
-                if ((std::chrono::system_clock::now() - active_time >= executor->idle_time &&
-                         executor->threads.size() > executor->low_watermark ||
-                     executor->state != State::kRun) &&
-                    executor->tasks.empty()) {
-                    executor->threads.erase(std::this_thread::get_id());
-                    executor->stop_condition.notify_one();
-                    return;
+                if (executor->empty_condition.wait_for(lock, executor->idle_time, [&executor](void) {
+                        return executor->state == Executor::State::kStopping || executor->tasks.empty();
+                    })) {
+                    if ((executor->threads.size() > executor->low_watermark || executor->state != State::kRun) &&
+                        executor->tasks.empty()) {
+                        for (size_t i = 0; i < executor->threads.size(); i++) {
+                            if (executor->threads[i].get_id() == std::this_thread::get_id()) {
+                                executor->threads.erase(executor->threads.begin() + i);
+                                break;
+                            }
+                        }
+                        return;
+                    }
+                    continue;
                 }
-
+                executor->idle_threads -= 1;
                 task = executor->tasks.front();
                 executor->tasks.pop_front();
             }
             task();
-            active_time = std::chrono::system_clock::now();
         }
     }
 
@@ -134,7 +137,6 @@ private:
      * Conditional variable to await new data in case of empty queue
      */
     std::condition_variable empty_condition;
-    std::condition_variable stop_condition;
 
     /**
      * Vector of actual threads that perorm execution

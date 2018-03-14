@@ -18,6 +18,7 @@
 #include <unistd.h>
 
 #include "../../protocol/Parser.h"
+#include <afina/Executor.h>
 #include <afina/Storage.h>
 #include <afina/execute/Command.h>
 
@@ -42,7 +43,6 @@ void *ServerImpl::RunConnectionProxy(void *p) {
     } catch (std::runtime_error &ex) {
         std::cerr << "Server fails: " << ex.what() << std::endl;
     }
-    
 }
 
 // See Server.h
@@ -174,6 +174,7 @@ void ServerImpl::RunAcceptor() {
         throw std::runtime_error("Socket listen() failed");
     }
 
+    Afina::Executor ex("Executor 1", 10, 20, 60, std::chrono::milliseconds(100));
     int client_socket;
     struct sockaddr_in client_addr;
     socklen_t sinSize = sizeof(struct sockaddr_in);
@@ -192,10 +193,16 @@ void ServerImpl::RunAcceptor() {
         if (connections.size() < max_workers) {
             auto temp = std::make_pair(this, client_socket);
             pthread_t client_pthread;
-            if (pthread_create(&client_pthread, NULL, ServerImpl::RunConnectionProxy, &temp) < 0) {
+            if (!ex.Execute(&Afina::Network::Blocking::ServerImpl::RunConnection, this, client_socket)) {
                 close(client_socket);
                 throw std::runtime_error("Could not create server thread");
             }
+
+            /*if (pthread_create(&client_pthread, NULL, ServerImpl::RunConnectionProxy, &temp) < 0) {
+                close(client_socket);
+                throw std::runtime_error("Could not create server thread");
+            }*/
+
             connections.insert(client_pthread);
         } else {
             close(client_socket);

@@ -40,7 +40,7 @@ protected:
     /**
      * Methos is running for each connection
      */
-    void RunConnection();
+    // void RunConnection();
     void RunConnection(int socket);
 
 private:
