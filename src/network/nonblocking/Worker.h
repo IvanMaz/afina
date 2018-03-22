@@ -14,13 +14,6 @@ class Storage;
 namespace Network {
 namespace NonBlocking {
 
-class Connection {
-public:
-    Connection(int _fd) : fd(_fd) {}
-    ~Connection(void) {}
-    int fd;
-};
-
 /**
  * # Thread running epoll
  * On Start spaws background thread that is doing epoll on the given server
@@ -57,18 +50,16 @@ protected:
     /**
      * Method executing by background thread
      */
-    void OnRun(int);
+    void OnRun(int socket);
     static void* OnRunProxy(void *args);
-    bool readd(int socket);
+    bool read_(int, std::unordered_map<int, std::string>::iterator);
 
 private:
     pthread_t thread;
-    std::unordered_map<int, std::unique_ptr<Connection>> connections;
+    std::unordered_map<int, std::string> connections;
     std::shared_ptr<Afina::Storage> pStorage;
     int server_socket;
     std::atomic<bool> running;
-
-    const size_t EPOLL_MAX_EVENTS = 10;
 };
 
 } // namespace NonBlocking

@@ -1,27 +1,51 @@
 #include "MapBasedGlobalLockImpl.h"
 
 #include <mutex>
+#include <iostream>
 
 namespace Afina {
 namespace Backend {
 
-// See MapBasedGlobalLockImpl.h
+// // See MapBasedGlobalLockImpl.h
+bool MapBasedGlobalLockImpl::FreeSpace(int new_size) {
+    while (_current_size + new_size > _max_size) {
+        auto last = _lru.back();
+
+        _current_size -= (int) (last.first.size() + last.second.size());
+
+        _cacheMap.erase(last.first);
+        _lru.pop_back();
+    }
+    return true;
+}
 bool MapBasedGlobalLockImpl::Put(const std::string &key, const std::string &value) {
     std::unique_lock<std::mutex> guard(_lock);
 
-    if (exists(key)) {
-        _size -= key.size() + _list->front()->value.size();
-        if (!free_space(key.size() + value.size())) {
-            _size += key.size() + _list->front()->value.size();
+    auto p = _cacheMap.find(key);               //map iterator
+    auto new_size = key.size() + value.size();
+
+    if (new_size > _max_size) {
+        return false;
+    }
+
+    if (p == _cacheMap.end()) {
+        if (!FreeSpace((int)new_size)) {
             return false;
         }
-        _list->front()->value = value;
+
+        _lru.push_front(std::make_pair(key, value));        //put new element at head
+        _cacheMap[std::cref(_lru.front().first)] = _lru.begin();
+        _current_size += new_size;
+
     } else {
-        if (!free_space(key.size() + value.size())) {
+
+        auto old_size = p->second->first.size() + p->second->second.size();
+        _lru.splice(_lru.begin(), _lru, p->second);
+
+        if (!FreeSpace((int)(new_size - old_size))) {
             return false;
         }
-        _list->push_front(key, value);
-        _backend.emplace(_list->front()->key, _list->front());
+        _lru.front().second = value;
     }
     return true;
 }
@@ -30,14 +54,24 @@ bool MapBasedGlobalLockImpl::Put(const std::string &key, const std::string &valu
 bool MapBasedGlobalLockImpl::PutIfAbsent(const std::string &key, const std::string &value) {
     std::unique_lock<std::mutex> guard(_lock);
 
-    if (exists(key)) {
+    auto p = _cacheMap.find(key);               //map iterator
+    auto new_size = key.size() + value.size();
+
+    if (new_size > _max_size) {
         return false;
-    } else {
-        if (!free_space(key.size() + value.size())) {
+    }
+
+    if (p == _cacheMap.end()) {
+        if (!FreeSpace((int)new_size)) {
             return false;
         }
-        _list->push_front(key, value);
-        _backend[key] = _list->front();
+
+        _lru.push_front(std::make_pair(key, value));        //put new element at head
+        _cacheMap[std::cref(_lru.front().first)] = _lru.begin();
+        _current_size += new_size;
+
+    } else {
+        return false;
     }
     return true;
 }
@@ -46,26 +80,38 @@ bool MapBasedGlobalLockImpl::PutIfAbsent(const std::string &key, const std::stri
 bool MapBasedGlobalLockImpl::Set(const std::string &key, const std::string &value) {
     std::unique_lock<std::mutex> guard(_lock);
 
-    if (exists(key)) {
-        _size -= key.size() + _list->front()->value.size();
-        if (!free_space(key.size() + value.size())) {
-            _size += key.size() + _list->front()->value.size();
-            return false;
-        }
-        _list->front()->value = value;
+    auto p = _cacheMap.find(key); //map iterator
+    auto new_size = key.size() + value.size();
+
+    if (new_size > _max_size) {
+        return false;
     }
-    return true;
+
+    if (p != _cacheMap.end()) {
+        auto old_size = p->second->first.size() + p->second->second.size();
+        _lru.splice(_lru.begin(), _lru, p->second);
+
+        FreeSpace((int)(new_size - old_size));
+
+        _current_size -= p->second->second.size();
+        _lru.front().second = value;
+        _current_size += new_size;
+        return true;
+
+    }
+    return false;
 }
 
 // See MapBasedGlobalLockImpl.h
 bool MapBasedGlobalLockImpl::Delete(const std::string &key) {
     std::unique_lock<std::mutex> guard(_lock);
 
-    if (exists(key)) {
-        auto item = _backend.find(key);
-        _size -= key.size() + item->second->value.size();
-        _list->erase(item->second);
-        _backend.erase(key);
+    auto p = _cacheMap.find(key); //map iterator
+
+    if (p != _cacheMap.end()) {
+        auto item = _cacheMap.find(key);
+        _lru.erase(item->second);
+        _cacheMap.erase(key);
         return true;
     }
     return false;
@@ -73,108 +119,31 @@ bool MapBasedGlobalLockImpl::Delete(const std::string &key) {
 
 // See MapBasedGlobalLockImpl.h
 bool MapBasedGlobalLockImpl::Get(const std::string &key, std::string &value) const {
-    std::unique_lock<std::mutex> guard(_lock);
+    std::lock_guard<std::mutex> lock(_lock);
 
-    if (exists(key)) {
-        value = _list->front()->value;
+    auto p = _cacheMap.find(key); //map iterator
+
+    if (p != _cacheMap.end()) {
+        _lru.splice(_lru.begin(), _lru, p->second);
+        value = _lru.front().second;
         return true;
     }
     return false;
 }
 
-// Check if record for given key exists and move it to the beginnind of LRU _list
-bool MapBasedGlobalLockImpl::exists(const std::string &key) const {
-    auto it = _backend.find(key);
-    if (it != _backend.end()) {
-        _list->move_to_front(it->second);
-        return true;
-    }
-    return false;
+// See MapBasedGlobalLockImpl.h
+int MapBasedGlobalLockImpl::GetSize() const {
+    return _max_size;
 }
 
-// Check if new pair key/value fits into memory
-// Remove least used records from cache until there is enought space for new record
-bool MapBasedGlobalLockImpl::free_space(size_t elem_size) {
-    if (elem_size > _max_size) {
-        return false;
-    }
-    while (elem_size + _size > _max_size) {
-        auto last = _list->back();
-        _size -= last->key.size() + last->key.size();
-        _backend.erase(_list->back()->key);
-        _list->pop_back();
-    }
-    _size += elem_size;
+
+int MapBasedGlobalLockImpl::GetCurrentSize() const {
+    return _current_size;
+}
+
+bool MapBasedGlobalLockImpl::SetNewCurrentSize(const int newSize) {
+    _current_size = newSize;
     return true;
 }
-
-Dl_list::Dl_list() { head = NULL; }
-
-Dl_list::~Dl_list() {
-    while (head) {
-        Node *tmp = head;
-        head = head->next;
-        delete (tmp);
-    }
 }
-
-void Dl_list::push_front(std::string key, std::string value) {
-
-    Node *node = new Node();
-    node->key = key;
-    node->value = value;
-    node->prev = NULL;
-
-    if (head == NULL) {
-        node->next = NULL;
-        head = node;
-        tail = node;
-    } else {
-        node->next = head;
-        node->next->prev = node;
-        head = node;
-    }
 }
-
-void Dl_list::pop_back() {
-    Node *tmp = tail;
-    tail->prev->next = NULL;
-    tail = tail->prev;
-    delete (tmp);
-}
-
-void Dl_list::erase(Node *node) {
-    if (node == head) {
-        Node *tmp = head;
-        head = node->next;
-        head->prev = NULL;
-        delete (tmp);
-    } else if (node == tail) {
-        pop_back();
-    } else {
-        node->prev->next = node->next;
-        delete (node);
-    }
-}
-
-void Dl_list::move_to_front(Node *node) {
-    if (node != head) {
-        if (node == tail) {
-            tail = node->prev;
-        } else {
-            node->next->prev = node->prev;
-        }
-        node->prev->next = node->next;
-        node->prev = NULL;
-        head->prev = node;
-        node->next = head;
-        head = node;
-    }
-}
-
-Node *Dl_list::front() { return head; }
-
-Node *Dl_list::back() { return tail; }
-
-} // namespace Backend
-} // namespace Afina
