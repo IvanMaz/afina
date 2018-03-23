@@ -229,37 +229,57 @@ void ServerImpl::RunConnection(int socket) {
     char buf[buf_size];
 
     while (running.load()) {
-        if ((input_size = read(socket, buf, buf_size)) <= 0) {
+        if ((input_size = read(socket, buf, buf_size)) <= 0 && command.size() == 0) {
             break;
         }
+
         command += buf;
-        if (parser.Parse(buf, input_size, parsed)) {
-            command.erase(0, parsed);
-            auto command_ptr = parser.Build(body_size);
-            parser.Reset();
-            if (body_size > 0) {
-                while (body_size + 2 > command.size()) {
-                    input_size = read(socket, buf, buf_size);
-                    command += buf;
+
+        try {
+            if (parser.Parse(command, parsed)) {
+
+                std::memset(buf, 0, buf_size);
+                command.erase(0, parsed);
+
+                auto command_ptr = parser.Build(body_size);
+                parser.Reset();
+
+                if (body_size > 0) {
+                    while (body_size + 2 > command.size()) {
+                        input_size = read(socket, buf, buf_size);
+                        command += buf;
+                        std::memset(buf, 0, buf_size);
+                    }
+                    args = command.substr(0, body_size);
+                    command.erase(0, body_size + 2);
                 }
 
-                args = command.substr(0, body_size);
-                command.erase(0, body_size + 2);
-            }
-            std::string result;
-            try {
-                command_ptr->Execute(*pStorage, args, result);
-            } catch (...) {
-                result = "SERVER_ERROR";
-            }
-            result += "\r\n";
-            if (result.size() && send(socket, result.data(), result.size(), 0) <= 0) {
+                std::string result;
+                try {
+                    command_ptr->Execute(*pStorage, args, result);
+                } catch (...) {
+                    result = "SERVER_ERROR";
+                }
+                result += "\r\n";
+
+                if (result.size() && send(socket, result.data(), result.size(), 0) <= 0) {
+                    throw std::runtime_error("Socket send() failed");
+                }
                 break;
+
+            } else {
+                std::memset(buf, 0, buf_size);
+                command.erase(0, parsed);
+                continue;
             }
-            parser.Reset();
-        } else {
-            command.substr(parsed);
-            continue;
+        } catch (std::runtime_error &e) {
+            std::string result = std::string("SERVER_ERROR ") + e.what() + std::string("\r\n");
+            command.clear();
+            
+            if (send(socket, result.data(), result.size(), 0) <= 0) {
+                throw std::runtime_error("Socket send() failed");
+            }
+            break;
         }
     }
     pthread_t self_id = pthread_self();
