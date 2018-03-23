@@ -9,7 +9,7 @@ namespace Backend {
 // See MapBasedGlobalLockImpl.h
 bool MapBasedGlobalLockImpl::Put(const std::string &key, const std::string &value) {
     std::unique_lock<std::mutex> guard(_lock);
-    std::cout << "key3 = " << key << '\n';
+
     if (exists(key)) {
         _size -= key.size() + _list->front()->value.size();
         if (!free_space(key.size() + value.size())) {
@@ -30,7 +30,7 @@ bool MapBasedGlobalLockImpl::Put(const std::string &key, const std::string &valu
 // See MapBasedGlobalLockImpl.h
 bool MapBasedGlobalLockImpl::PutIfAbsent(const std::string &key, const std::string &value) {
     std::unique_lock<std::mutex> guard(_lock);
-    std::cout << "key2 = " << key << '\n';
+    
     if (exists(key)) {
         return false;
     } else {
@@ -46,7 +46,7 @@ bool MapBasedGlobalLockImpl::PutIfAbsent(const std::string &key, const std::stri
 // See MapBasedGlobalLockImpl.h
 bool MapBasedGlobalLockImpl::Set(const std::string &key, const std::string &value) {
     std::unique_lock<std::mutex> guard(_lock);
-    std::cout << "key1 = " << key << '\n';
+    
     if (exists(key)) {
         _size -= key.size() + _list->front()->value.size();
         if (!free_space(key.size() + value.size())) {
@@ -76,7 +76,7 @@ bool MapBasedGlobalLockImpl::Delete(const std::string &key) {
 // See MapBasedGlobalLockImpl.h
 bool MapBasedGlobalLockImpl::Get(const std::string &key, std::string &value) const {
     std::unique_lock<std::mutex> guard(_lock);
-    std::cout << "key4 = " << key << '\n';
+    
     if (exists(key)) {
         value = _list->front()->value;
         return true;
@@ -86,14 +86,12 @@ bool MapBasedGlobalLockImpl::Get(const std::string &key, std::string &value) con
 
 // Check if record for given key exists and move it to the beginnind of LRU _list
 bool MapBasedGlobalLockImpl::exists(const std::string &key) const {
-    std::cout << "key5 = " << key << '\n';
+    
     auto it = _backend.find(key);
     if (it != _backend.end()) {
-        std::cout << "key6 = " << key << '\n';
         _list->move_to_front(it->second);
         return true;
     }
-    std::cout << "key7 = " << key << '\n';
     return false;
 }
 
