@@ -1,14 +1,13 @@
 #ifndef AFINA_STORAGE_MAP_BASED_GLOBAL_LOCK_IMPL_H
 #define AFINA_STORAGE_MAP_BASED_GLOBAL_LOCK_IMPL_H
 
+#include <functional>
+#include <list>
 #include <map>
 #include <mutex>
 #include <string>
-#include <functional>
-#include <list>
 
-#include <afina/Storage.h>
-//#include "Storage.h"
+#include "../../include/afina/Storage.h"
 
 namespace Afina {
 namespace Backend {
@@ -18,11 +17,35 @@ namespace Backend {
  *
  *
  */
+class Node {
+public:
+    std::string key;
+    std::string value;
+    Node *next;
+    Node *prev;
+};
+
+class Dl_list {
+public:
+    Dl_list();
+    ~Dl_list();
+    void push_front(std::string, std::string);
+    void pop_back();
+    void erase(Node *);
+    void move_to_front(Node *);
+    void print();
+    Node *front();
+    Node *back();
+
+private:
+    Node *head;
+    Node *tail;
+};
+
 class MapBasedGlobalLockImpl : public Afina::Storage {
 public:
-    MapBasedGlobalLockImpl(int max_size = 1024) : _max_size(max_size), _current_size(0) {}
-
-    ~MapBasedGlobalLockImpl() {}
+    MapBasedGlobalLockImpl(size_t max_size = 1024) : _max_size(max_size), _size(0), _list(new Dl_list()) {}
+    ~MapBasedGlobalLockImpl() { delete (_list); }
 
     // Implements Afina::Storage interface
     bool Put(const std::string &key, const std::string &value) override;
@@ -39,26 +62,16 @@ public:
     // Implements Afina::Storage interface
     bool Get(const std::string &key, std::string &value) const override;
 
-
-    int GetSize() const;
-    int GetCurrentSize() const;
-    bool SetNewCurrentSize(int newSize);
-    bool FreeSpace(int new_size);
-
 private:
-
-    int _max_size;
-    int _current_size;
-
+    size_t _max_size;
+    size_t _size;
     mutable std::mutex _lock;
 
-    //ключ, значение
-    mutable std::list<std::pair<std::string, std::string> > _lru;
+    Dl_list *_list;
+    std::map<std::reference_wrapper<const std::string>, Node *, std::less<const std::string>> _backend;
 
-    // ссылка на ключ, итератор на соответствующий элемент в списке
-    std::map<std::reference_wrapper<const std::string>,
-            std::list<std::pair<std::string, std::string> >::iterator,
-            std::less<const std::string> > _cacheMap;
+    bool exists(const std::string &key) const;
+    bool free_space(size_t);
 };
 
 } // namespace Backend
